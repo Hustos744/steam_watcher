@@ -24,6 +24,9 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    volumes:
+      - ./output/shorts:/app/output/shorts
+      - ./assets/music:/app/assets/music
 
 volumes:
   steam_watcher_postgres_data:

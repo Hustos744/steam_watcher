@@ -3,6 +3,7 @@ import time
 from typing import List
 
 from app.curator_blocklist import SteamCuratorBlocklist
+from app.pipelines.tiktok import TikTokPipeline
 from app.repository import StateRepository
 from app.steam import Deal, SteamClient
 from app.telegram_client import TelegramPublisher
@@ -17,6 +18,8 @@ class DiscountWatcherService:
         min_discount_percent: int,
         max_posts_per_run: int,
         post_delay_seconds: float = 0.0,
+        shorts_pipeline: TikTokPipeline | None = None,
+        shorts_enabled: bool = False,
         curator_blocklist: SteamCuratorBlocklist | None = None,
         manual_blocklist_appids: set[int] | None = None,
         dry_run: bool = False,
@@ -27,6 +30,8 @@ class DiscountWatcherService:
         self.min_discount_percent = min_discount_percent
         self.max_posts_per_run = max_posts_per_run
         self.post_delay_seconds = max(post_delay_seconds, 0.0)
+        self.shorts_pipeline = shorts_pipeline
+        self.shorts_enabled = shorts_enabled
         self.curator_blocklist = curator_blocklist
         self.manual_blocklist_appids = manual_blocklist_appids or set()
         self.dry_run = dry_run
@@ -81,6 +86,15 @@ class DiscountWatcherService:
                     self.logger.exception("Failed to post deal: %s (appid=%s)", deal.name, deal.appid)
                     continue
                 self.logger.info("Posted deal: %s (%s%%)", deal.name, deal.discount_percent)
+                if self.shorts_enabled and self.shorts_pipeline is not None:
+                    try:
+                        output = self.shorts_pipeline.generate_for_deal(deal, media)
+                        if output:
+                            self.logger.info("Generated short video: %s", output)
+                        else:
+                            self.logger.info("Shorts skipped (no trailer/music): appid=%s", deal.appid)
+                    except Exception:
+                        self.logger.exception("Failed to generate short video for appid=%s", deal.appid)
 
             self.repository.mark_posted(deal.appid, deal.discount_expiration, deal.final_price)
             posted += 1
