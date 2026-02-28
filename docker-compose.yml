@@ -1,0 +1,12 @@
+services:
+  steam-watcher:
+    build: .
+    container_name: steam-watcher
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - steam_watcher_data:/app/data
+
+volumes:
+  steam_watcher_data:
