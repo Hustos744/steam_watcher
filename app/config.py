@@ -64,6 +64,6 @@ def load_settings() -> Settings:
         log_level=os.getenv("LOG_LEVEL", "INFO"),
         curator_blocklist_url=os.getenv("CURATOR_BLOCKLIST_URL", ""),
         curator_blocklist_refresh_seconds=int(os.getenv("CURATOR_BLOCKLIST_REFRESH_SECONDS", "3600")),
-        curator_blocklist_max_pages=int(os.getenv("CURATOR_BLOCKLIST_MAX_PAGES", "5")),
+        curator_blocklist_max_pages=int(os.getenv("CURATOR_BLOCKLIST_MAX_PAGES", "0")),
         manual_blocklist_appids=_to_int_set(os.getenv("BLOCKLIST_APPIDS", "")),
     )

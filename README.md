@@ -12,7 +12,7 @@ MVP-сервіс для:
 - Знижки фільтруються за `MIN_DISCOUNT_PERCENT`.
 - Щоб уникати дублювань, posted deals зберігаються у SQLite (`posted_deals`).
 - У Telegram відправляється `sendPhoto` з картинкою та caption.
-- Якщо заданий `CURATOR_BLOCKLIST_URL`, ігри з цього списку не публікуються.
+- Якщо заданий `CURATOR_BLOCKLIST_URL`, сервіс проходить сторінки куратора, додає нові `appid` у локальну SQLite-таблицю `blocked_appids` і не публікує ці ігри.
 
 ## Швидкий старт (Docker)
 
@@ -51,8 +51,10 @@ docker compose logs -f
 - `DRY_RUN` - `true/false`.
 - `CURATOR_BLOCKLIST_URL` - URL сторінки Steam Curator зі списком ігор для виключення.
 - `CURATOR_BLOCKLIST_REFRESH_SECONDS` - як часто оновлювати список з куратора.
-- `CURATOR_BLOCKLIST_MAX_PAGES` - ліміт сторінок пагінації куратора.
+- `CURATOR_BLOCKLIST_MAX_PAGES` - ліміт сторінок пагінації куратора (`0` = авто-прохід до кінця).
 - `BLOCKLIST_APPIDS` - ручний список `appid` через кому (додатковий фільтр).
+
+Рекомендація: використовуйте URL профілю куратора (наприклад `https://store.steampowered.com/curator/12345678/`), а не тільки RSS-стрічку.
 
 ## Локальний запуск без Docker
 

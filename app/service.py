@@ -30,9 +30,14 @@ class DiscountWatcherService:
         self.logger = logging.getLogger(self.__class__.__name__)
 
     def run_once(self) -> int:
-        blocked_appids = set(self.manual_blocklist_appids)
+        blocked_appids = set(self.repository.get_blocked_appids())
+        blocked_appids.update(self.manual_blocklist_appids)
         if self.curator_blocklist is not None:
-            blocked_appids.update(self.curator_blocklist.get_appids())
+            curator_appids = self.curator_blocklist.get_appids()
+            new_items = self.repository.upsert_blocked_appids(curator_appids, source="curator")
+            if new_items:
+                self.logger.info("Added %s new blocked appids from curator", new_items)
+            blocked_appids.update(curator_appids)
 
         deals: List[Deal] = sorted(
             self.steam.fetch_special_deals(),

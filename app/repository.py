@@ -24,6 +24,16 @@ class StateRepository:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS blocked_appids (
+                    appid INTEGER PRIMARY KEY,
+                    source TEXT NOT NULL,
+                    first_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
             conn.commit()
 
     def was_posted(self, appid: int, discount_expiration: int, final_price: int) -> bool:
@@ -49,3 +59,36 @@ class StateRepository:
                 (appid, discount_expiration, final_price),
             )
             conn.commit()
+
+    def upsert_blocked_appids(self, appids: set[int], source: str = "curator") -> int:
+        if not appids:
+            return 0
+
+        new_count = 0
+        with self._connect() as conn:
+            for appid in appids:
+                cursor = conn.execute(
+                    """
+                    INSERT OR IGNORE INTO blocked_appids(appid, source)
+                    VALUES (?, ?)
+                    """,
+                    (appid, source),
+                )
+                if cursor.rowcount:
+                    new_count += 1
+
+                conn.execute(
+                    """
+                    UPDATE blocked_appids
+                    SET last_seen_at = CURRENT_TIMESTAMP
+                    WHERE appid = ?
+                    """,
+                    (appid,),
+                )
+            conn.commit()
+        return new_count
+
+    def get_blocked_appids(self) -> set[int]:
+        with self._connect() as conn:
+            cursor = conn.execute("SELECT appid FROM blocked_appids")
+            return {int(row[0]) for row in cursor.fetchall()}
