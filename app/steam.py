@@ -31,6 +31,7 @@ class Deal:
 @dataclass(frozen=True)
 class DealMedia:
     trailer_url: str | None
+    trailer_urls: list[str]
     image_urls: list[str]
 
 
@@ -81,12 +82,23 @@ class SteamClient:
         data = app_data.get("data", {}) if app_data.get("success") else {}
 
         trailer_url: str | None = None
+        trailer_urls: list[str] = []
         movies = data.get("movies", []) or []
         for movie in movies:
             mp4 = movie.get("mp4", {}) or {}
-            trailer_url = mp4.get("max") or mp4.get("480")
-            if trailer_url:
-                break
+            # Steam appdetails schema changed for many games:
+            # trailer URL is often in dash_h264 / hls_h264, not mp4.
+            candidate = (
+                mp4.get("max")
+                or mp4.get("480")
+                or movie.get("hls_h264")
+                or movie.get("dash_h264")
+            )
+            if candidate and candidate not in trailer_urls:
+                trailer_urls.append(candidate)
+
+        if trailer_urls:
+            trailer_url = trailer_urls[0]
 
         image_urls: list[str] = []
         screenshots = data.get("screenshots", []) or []
@@ -97,4 +109,4 @@ class SteamClient:
             if len(image_urls) >= max_images:
                 break
 
-        return DealMedia(trailer_url=trailer_url, image_urls=image_urls)
+        return DealMedia(trailer_url=trailer_url, trailer_urls=trailer_urls, image_urls=image_urls)

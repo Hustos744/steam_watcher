@@ -43,21 +43,12 @@ class Settings:
     database_url: str
     retention_days: int
     shorts_enabled: bool
-    shorts_duration_seconds: int
+    shorts_per_game_seconds: int
+    shorts_intro_seconds: int
+    shorts_outro_seconds: int
+    shorts_trailer_fallback_start_seconds: float
     shorts_output_dir: str
-    shorts_music_dir: str
-    music_provider: str
-    music_autofetch_enabled: bool
-    popular_music_api_key: str
-    jamendo_client_id: str
-    popular_music_target_count: int
-    popular_music_refresh_hours: int
-    music_curator_enabled: bool
-    music_curator_chat_id: str
-    music_curator_hour: int
-    music_curator_minute: int
-    music_curator_timezone: str
-    music_curator_batch_size: int
+    shorts_timezone: str
     shorts_cta_telegram_url: str
     shorts_font_path: str
     log_level: str
@@ -92,21 +83,12 @@ def load_settings() -> Settings:
         database_url=os.getenv("DATABASE_URL", "postgresql://steam:steam@postgres:5432/steam_watcher"),
         retention_days=int(os.getenv("RETENTION_DAYS", "30")),
         shorts_enabled=_to_bool(os.getenv("SHORTS_ENABLED", "false"), default=False),
-        shorts_duration_seconds=int(os.getenv("SHORTS_DURATION_SECONDS", "15")),
+        shorts_per_game_seconds=int(os.getenv("SHORTS_PER_GAME_SECONDS", "4")),
+        shorts_intro_seconds=int(os.getenv("SHORTS_INTRO_SECONDS", "3")),
+        shorts_outro_seconds=int(os.getenv("SHORTS_OUTRO_SECONDS", "3")),
+        shorts_trailer_fallback_start_seconds=float(os.getenv("SHORTS_TRAILER_FALLBACK_START_SECONDS", "8.0")),
         shorts_output_dir=os.getenv("SHORTS_OUTPUT_DIR", "/app/output/shorts"),
-        shorts_music_dir=os.getenv("SHORTS_MUSIC_DIR", "/app/assets/music"),
-        music_provider=os.getenv("MUSIC_PROVIDER", "jamendo"),
-        music_autofetch_enabled=_to_bool(os.getenv("MUSIC_AUTOFETCH_ENABLED", "false"), default=False),
-        popular_music_api_key=os.getenv("POPULAR_MUSIC_API_KEY", ""),
-        jamendo_client_id=os.getenv("JAMENDO_CLIENT_ID", ""),
-        popular_music_target_count=int(os.getenv("POPULAR_MUSIC_TARGET_COUNT", "20")),
-        popular_music_refresh_hours=int(os.getenv("POPULAR_MUSIC_REFRESH_HOURS", "24")),
-        music_curator_enabled=_to_bool(os.getenv("MUSIC_CURATOR_ENABLED", "false"), default=False),
-        music_curator_chat_id=os.getenv("MUSIC_CURATOR_CHAT_ID", ""),
-        music_curator_hour=int(os.getenv("MUSIC_CURATOR_HOUR", "9")),
-        music_curator_minute=int(os.getenv("MUSIC_CURATOR_MINUTE", "0")),
-        music_curator_timezone=os.getenv("MUSIC_CURATOR_TIMEZONE", "Europe/Kyiv"),
-        music_curator_batch_size=int(os.getenv("MUSIC_CURATOR_BATCH_SIZE", "3")),
+        shorts_timezone=os.getenv("SHORTS_TIMEZONE", "Europe/Kyiv"),
         shorts_cta_telegram_url=os.getenv("SHORTS_CTA_TELEGRAM_URL", "https://t.me/your_channel"),
         shorts_font_path=os.getenv("SHORTS_FONT_PATH", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
         log_level=os.getenv("LOG_LEVEL", "INFO"),

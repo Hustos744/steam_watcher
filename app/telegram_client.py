@@ -3,6 +3,7 @@
 import logging
 import json
 import time
+from urllib.parse import urlparse
 
 import requests
 
@@ -104,7 +105,7 @@ class TelegramPublisher:
             }
         )
 
-        if self.include_trailer and media and media.trailer_url:
+        if self.include_trailer and media and media.trailer_url and self._is_telegram_video_url(media.trailer_url):
             group.append(
                 {
                     "type": "video",
@@ -124,6 +125,13 @@ class TelegramPublisher:
                 group.append({"type": "photo", "media": url})
 
         return group
+
+    @staticmethod
+    def _is_telegram_video_url(url: str) -> bool:
+        # Telegram sendMediaGroup video URL must be a direct video file URL.
+        # HLS/DASH manifests (.m3u8/.mpd) often return 400 in Bot API.
+        path = urlparse(url).path.lower()
+        return path.endswith(".mp4")
 
     def publish_deal(self, deal: Deal, media: DealMedia | None = None) -> None:
         caption = f"{self.compose_caption(deal)}\n{self.post_formatter.links_line(deal)}"

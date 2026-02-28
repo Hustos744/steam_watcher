@@ -1,6 +1,7 @@
 import logging
 import time
 from typing import List
+from urllib.parse import urlsplit, urlunsplit
 
 from app.curator_blocklist import SteamCuratorBlocklist
 from app.pipelines.tiktok import TikTokPipeline
@@ -37,6 +38,13 @@ class DiscountWatcherService:
         self.dry_run = dry_run
         self.logger = logging.getLogger(self.__class__.__name__)
 
+    @staticmethod
+    def _normalize_trailer_url(url: str) -> str:
+        # Steam often appends short-lived query tokens. Remove query/fragment
+        # so ffmpeg can fetch stable HLS/DASH manifest URLs.
+        parts = urlsplit(url)
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+
     def run_once(self) -> int:
         posted_deleted, blocked_deleted = self.repository.cleanup_expired_records()
         if posted_deleted or blocked_deleted:
@@ -61,13 +69,21 @@ class DiscountWatcherService:
             reverse=True,
         )
 
-        posted = 0
+        eligible_deals: list[Deal] = []
+        seen_appids: set[int] = set()
         for deal in deals:
             if deal.discount_percent < self.min_discount_percent:
                 continue
             if deal.appid in blocked_appids:
-                self.logger.info("Skipped blocked game: %s (appid=%s)", deal.name, deal.appid)
                 continue
+            if deal.appid in seen_appids:
+                continue
+            seen_appids.add(deal.appid)
+            eligible_deals.append(deal)
+
+        posted = 0
+        trailer_cache: dict[int, list[str]] = {}
+        for deal in eligible_deals:
             if self.repository.was_posted(deal.appid, deal.discount_expiration, deal.final_price):
                 continue
 
@@ -78,6 +94,12 @@ class DiscountWatcherService:
                 media = None
                 try:
                     media = self.steam.fetch_deal_media(deal.appid)
+                    trailer_urls = []
+                    if media:
+                        trailer_urls = media.trailer_urls or ([] if not media.trailer_url else [media.trailer_url])
+                    normalized = [self._normalize_trailer_url(u) for u in trailer_urls if u]
+                    if normalized:
+                        trailer_cache[deal.appid] = list(dict.fromkeys(normalized))
                 except Exception:
                     self.logger.exception("Failed to fetch media for appid=%s", deal.appid)
                 try:
@@ -86,15 +108,6 @@ class DiscountWatcherService:
                     self.logger.exception("Failed to post deal: %s (appid=%s)", deal.name, deal.appid)
                     continue
                 self.logger.info("Posted deal: %s (%s%%)", deal.name, deal.discount_percent)
-                if self.shorts_enabled and self.shorts_pipeline is not None:
-                    try:
-                        output = self.shorts_pipeline.generate_for_deal(deal, media)
-                        if output:
-                            self.logger.info("Generated short video: %s", output)
-                        else:
-                            self.logger.info("Shorts skipped (no trailer/music): appid=%s", deal.appid)
-                    except Exception:
-                        self.logger.exception("Failed to generate short video for appid=%s", deal.appid)
 
             self.repository.mark_posted(deal.appid, deal.discount_expiration, deal.final_price)
             posted += 1
@@ -102,6 +115,37 @@ class DiscountWatcherService:
                 break
             if not self.dry_run and self.post_delay_seconds > 0:
                 time.sleep(self.post_delay_seconds)
+
+        if not self.dry_run and self.shorts_enabled and self.shorts_pipeline is not None:
+            try:
+                if self.shorts_pipeline.should_generate_today():
+                    daily_entries: list[tuple[Deal, list[str]]] = []
+                    for deal in eligible_deals:
+                        trailer_urls = trailer_cache.get(deal.appid, [])
+                        if not trailer_urls:
+                            try:
+                                media = self.steam.fetch_deal_media(deal.appid)
+                                fetched = []
+                                if media:
+                                    fetched = media.trailer_urls or ([] if not media.trailer_url else [media.trailer_url])
+                                normalized = [self._normalize_trailer_url(u) for u in fetched if u]
+                                if normalized:
+                                    trailer_urls = list(dict.fromkeys(normalized))
+                                    trailer_cache[deal.appid] = trailer_urls
+                            except Exception:
+                                self.logger.exception("Failed to fetch media for daily video appid=%s", deal.appid)
+                        if trailer_urls:
+                            daily_entries.append((deal, trailer_urls))
+                        else:
+                            self.logger.info("No trailers found for daily video appid=%s", deal.appid)
+
+                    output = self.shorts_pipeline.generate_daily_video(daily_entries)
+                    if output:
+                        self.logger.info("Generated daily short video: %s", output)
+                    else:
+                        self.logger.info("Daily short skipped: no trailer media available")
+            except Exception:
+                self.logger.exception("Failed to generate daily short video")
 
         self.logger.info("Run completed. Posted: %s", posted)
         return posted

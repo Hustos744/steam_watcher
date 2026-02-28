@@ -1,150 +1,268 @@
 ﻿from __future__ import annotations
 
-import random
-import re
+import logging
+import shutil
 import subprocess
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
-from app.steam import Deal, DealMedia
-
-
-def _sanitize_filename(name: str) -> str:
-    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", name.strip())
-    return safe[:80] if safe else "game"
-
-
-def _escape_drawtext(text: str) -> str:
-    # ffmpeg drawtext escaping
-    return (
-        text.replace("\\", "\\\\")
-        .replace(":", "\\:")
-        .replace("'", "\\'")
-        .replace("%", "\\%")
-        .replace(",", "\\,")
-    )
-
-
-def _format_price(cents: int, currency: str) -> str:
-    if cents <= 0:
-        return "Free"
-    return f"{cents / 100:.2f} {currency}"
+from app.pipelines.shorts_design import ShortsDesign
+from app.steam import Deal
 
 
 class TikTokPipeline:
     def __init__(
         self,
         output_dir: str,
-        music_dir: str,
         telegram_url: str,
-        duration_seconds: int = 15,
+        per_game_seconds: int = 4,
+        intro_seconds: int = 3,
+        outro_seconds: int = 3,
+        trailer_fallback_start_seconds: float = 8.0,
+        timezone_name: str = "Europe/Kyiv",
         font_path: str = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     ):
         self.output_dir = Path(output_dir)
-        self.music_dir = Path(music_dir)
         self.telegram_url = telegram_url
-        self.duration_seconds = max(10, duration_seconds)
+        self.per_game_seconds = max(per_game_seconds, 2)
+        self.intro_seconds = max(intro_seconds, 2)
+        self.outro_seconds = max(outro_seconds, 2)
+        self.trailer_fallback_start_seconds = max(trailer_fallback_start_seconds, 0.0)
+        self.tz = ZoneInfo(timezone_name)
         self.font_path = font_path
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.marker_path = self.output_dir / ".last_daily_video_date"
+        self.logger = logging.getLogger(self.__class__.__name__)
+        self.design = ShortsDesign()
+        self.ffmpeg_segment_timeout_seconds = 60
+        self.ffmpeg_concat_timeout_seconds = 90
 
-    def _pick_music_file(self) -> Path | None:
-        preferred_marker = self.music_dir / ".preferred_track.txt"
-        if preferred_marker.exists():
-            preferred_name = preferred_marker.read_text(encoding="utf-8").strip()
-            if preferred_name:
-                preferred_path = self.music_dir / preferred_name
-                if preferred_path.exists() and preferred_path.is_file():
-                    return preferred_path
+    def should_generate_today(self) -> bool:
+        today = datetime.now(self.tz).strftime("%Y-%m-%d")
+        if not self.marker_path.exists():
+            return True
+        last_date = self.marker_path.read_text(encoding="utf-8").strip()
+        return last_date != today
 
-        if not self.music_dir.exists():
-            return None
-        candidates = []
-        for ext in ("*.mp3", "*.wav", "*.m4a", "*.aac", "*.flac", "*.ogg"):
-            candidates.extend(self.music_dir.glob(ext))
-        if not candidates:
-            return None
-        return random.choice(candidates)
+    def _mark_generated_today(self) -> None:
+        today = datetime.now(self.tz).strftime("%Y-%m-%d")
+        self.marker_path.write_text(today, encoding="utf-8")
 
-    def _build_filter_complex(self, deal: Deal) -> str:
-        title = _escape_drawtext(deal.name)
-        discount = _escape_drawtext(f"-{deal.discount_percent}% OFF")
-        old_price = _escape_drawtext(_format_price(deal.original_price, deal.currency))
-        new_price = _escape_drawtext(_format_price(deal.final_price, deal.currency))
-        tg_line = _escape_drawtext("Like + Follow + Telegram")
-
-        # 1080x1920 vertical video with overlay text + CTA in last 3 seconds.
-        return (
-            "[0:v]"
-            "scale=1080:1920:force_original_aspect_ratio=increase,"
-            "crop=1080:1920,"
-            "fps=30,"
-            "format=yuv420p,"
-            f"trim=duration={self.duration_seconds},"
-            "setpts=PTS-STARTPTS[base];"
-            "[base]"
-            "drawbox=x=40:y=80:w=1000:h=360:color=black@0.45:t=fill,"
-            f"drawtext=fontfile={self.font_path}:text='{title}':x=70:y=120:fontsize=58:fontcolor=white,"
-            f"drawtext=fontfile={self.font_path}:text='{discount}':x=70:y=200:fontsize=76:fontcolor=yellow,"
-            f"drawtext=fontfile={self.font_path}:text='Old\\: {old_price}':x=70:y=290:fontsize=42:fontcolor=white,"
-            f"drawtext=fontfile={self.font_path}:text='Now\\: {new_price}':x=70:y=340:fontsize=52:fontcolor=lime,"
-            f"drawbox=enable='gte(t,{self.duration_seconds - 3})':x=0:y=1480:w=1080:h=440:color=black@0.70:t=fill,"
-            f"drawtext=enable='gte(t,{self.duration_seconds - 2.8})':fontfile={self.font_path}:"
-            "text='LIKE + FOLLOW':x=(w-text_w)/2:y=1560:fontsize=72:fontcolor=white,"
-            f"drawtext=enable='gte(t,{self.duration_seconds - 2.0})':fontfile={self.font_path}:"
-            f"text='{tg_line}':x=(w-text_w)/2:y=1650:fontsize=44:fontcolor=yellow,"
-            f"drawtext=enable='gte(t,{self.duration_seconds - 1.2})':fontfile={self.font_path}:"
-            f"text='{_escape_drawtext(self.telegram_url)}':x=(w-text_w)/2:y=1710:fontsize=36:fontcolor=cyan[vout];"
-            "[1:a]"
-            f"atrim=duration={self.duration_seconds},"
-            "afade=t=in:st=0:d=0.6,"
-            f"afade=t=out:st={self.duration_seconds - 1.0}:d=1.0,"
-            "volume=1.0[aout]"
+    def _build_intro(self, out_path: Path, date_str: str) -> None:
+        vf = self.design.intro_filter(
+            date_str=date_str,
+            font_path=self.font_path,
+            segment_duration=self.intro_seconds,
         )
-
-    def generate_for_deal(self, deal: Deal, media: DealMedia | None) -> Path | None:
-        if not media or not media.trailer_url:
-            return None
-
-        music_file = self._pick_music_file()
-        if not music_file:
-            return None
-
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        output_file = self.output_dir / f"{deal.appid}_{_sanitize_filename(deal.name)}_{timestamp}.mp4"
-
-        filter_complex = self._build_filter_complex(deal)
         command = [
             "ffmpeg",
             "-y",
-            "-stream_loop",
-            "-1",
+            "-f",
+            "lavfi",
             "-i",
-            media.trailer_url,
-            "-stream_loop",
-            "-1",
-            "-i",
-            str(music_file),
-            "-filter_complex",
-            filter_complex,
-            "-map",
-            "[vout]",
-            "-map",
-            "[aout]",
+            f"color=c=black:s=1080x1920:d={self.intro_seconds}",
+            "-vf",
+            vf,
+            "-r",
+            "30",
             "-c:v",
             "libx264",
-            "-preset",
-            "medium",
-            "-crf",
-            "22",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "192k",
-            "-movflags",
-            "+faststart",
-            str(output_file),
+            "-pix_fmt",
+            "yuv420p",
+            "-an",
+            str(out_path),
         ]
+        subprocess.run(command, check=True, capture_output=True, timeout=self.ffmpeg_segment_timeout_seconds)
 
-        subprocess.run(command, check=True, capture_output=True)
-        return output_file
+    def _build_outro(self, out_path: Path) -> None:
+        vf = self.design.outro_filter(
+            telegram_url=self.telegram_url,
+            font_path=self.font_path,
+            segment_duration=self.outro_seconds,
+        )
+        command = [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"color=c=black:s=1080x1920:d={self.outro_seconds}",
+            "-vf",
+            vf,
+            "-r",
+            "30",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-an",
+            str(out_path),
+        ]
+        subprocess.run(command, check=True, capture_output=True, timeout=self.ffmpeg_segment_timeout_seconds)
+
+    def _build_overlay_filter(self, deal: Deal) -> str:
+        return self.design.game_overlay_filter(
+            deal=deal,
+            font_path=self.font_path,
+            segment_duration=self.per_game_seconds,
+        )
+
+    def _build_game_segment_from_trailer(self, trailer_url: str, deal: Deal, out_path: Path) -> None:
+        vf = self._build_overlay_filter(deal)
+        start_offset = self._compute_trailer_start_offset(trailer_url)
+        command = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            trailer_url,
+            "-ss",
+            f"{start_offset:.2f}",
+            "-t",
+            str(self.per_game_seconds),
+            "-vf",
+            vf,
+            "-r",
+            "30",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-an",
+            str(out_path),
+        ]
+        subprocess.run(command, check=True, capture_output=True, timeout=self.ffmpeg_segment_timeout_seconds)
+        self._assert_segment_has_video(out_path)
+
+    def _compute_trailer_start_offset(self, trailer_url: str) -> float:
+        duration = self._probe_duration_seconds(trailer_url)
+        if duration is None or duration <= self.per_game_seconds:
+            return self.trailer_fallback_start_seconds
+        return max((duration - self.per_game_seconds) / 2.0, 0.0)
+
+    @staticmethod
+    def _probe_duration_seconds(media_url: str) -> float | None:
+        command = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            media_url,
+        ]
+        try:
+            result = subprocess.run(command, check=True, capture_output=True, text=True, timeout=20)
+            raw = (result.stdout or "").strip()
+            if not raw:
+                return None
+            value = float(raw)
+            if value > 0:
+                return value
+        except Exception:
+            return None
+        return None
+
+    @staticmethod
+    def _assert_segment_has_video(path: Path, min_seconds: float = 0.5) -> None:
+        duration = TikTokPipeline._probe_duration_seconds(str(path))
+        if duration is None or duration < min_seconds:
+            raise RuntimeError(f"Generated segment is empty or too short: {path} (duration={duration})")
+
+    def generate_daily_video(self, deals_with_trailers: list[tuple[Deal, list[str]]]) -> Path | None:
+        if not deals_with_trailers:
+            return None
+
+        date_obj = datetime.now(self.tz)
+        date_str = date_obj.strftime("%Y-%m-%d")
+        out_file = self.output_dir / f"steam_discounts_{date_str}.mp4"
+        temp_dir = self.output_dir / f".tmp_{date_str}_{date_obj.strftime('%H%M%S')}"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+
+        segments: list[Path] = []
+        try:
+            intro = temp_dir / "intro.mp4"
+            self._build_intro(intro, date_str)
+            segments.append(intro)
+
+            built_game_segments = 0
+            for idx, (deal, trailer_urls) in enumerate(deals_with_trailers, start=1):
+                seg = temp_dir / f"game_{idx:03d}.mp4"
+                built = False
+                for trailer_url in trailer_urls:
+                    self.logger.info("Daily segment build start: appid=%s url=%s", deal.appid, trailer_url)
+                    try:
+                        self._build_game_segment_from_trailer(trailer_url, deal, seg)
+                        built = True
+                        self.logger.info("Daily segment build ok: appid=%s", deal.appid)
+                        break
+                    except subprocess.TimeoutExpired:
+                        self.logger.warning(
+                            "Trailer segment timeout for appid=%s url=%s",
+                            deal.appid,
+                            trailer_url,
+                        )
+                    except subprocess.CalledProcessError as e:
+                        self.logger.warning(
+                            "Trailer segment failed for appid=%s url=%s code=%s",
+                            deal.appid,
+                            trailer_url,
+                            e.returncode,
+                        )
+                    except RuntimeError as e:
+                        self.logger.warning(
+                            "Trailer segment empty for appid=%s url=%s: %s",
+                            deal.appid,
+                            trailer_url,
+                            e,
+                        )
+                if not built:
+                    self.logger.warning("All trailers failed for appid=%s. Skipping game in daily video.", deal.appid)
+                    continue
+                segments.append(seg)
+                built_game_segments += 1
+
+            outro = temp_dir / "outro.mp4"
+            self._build_outro(outro)
+            segments.append(outro)
+
+            # Intro + outro only (no game segments) is not useful.
+            if len(segments) <= 2:
+                return None
+
+            concat_list = temp_dir / "concat.txt"
+            lines = [f"file '{p.as_posix()}'" for p in segments]
+            concat_list.write_text("\n".join(lines), encoding="utf-8")
+
+            concat_cmd = [
+                "ffmpeg",
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                str(concat_list),
+                "-r",
+                "30",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "fast",
+                "-crf",
+                "22",
+                "-pix_fmt",
+                "yuv420p",
+                "-an",
+                "-movflags",
+                "+faststart",
+                str(out_file),
+            ]
+            subprocess.run(concat_cmd, check=True, capture_output=True, timeout=self.ffmpeg_concat_timeout_seconds)
+            self.logger.info("Daily video concat done. game_segments=%s output=%s", built_game_segments, out_file)
+            self._mark_generated_today()
+            return out_file
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
