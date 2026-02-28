@@ -5,6 +5,7 @@ from typing import Iterable
 import requests
 
 STEAM_FEATURED_CATEGORIES_URL = "https://store.steampowered.com/api/featuredcategories"
+STEAM_APP_DETAILS_URL = "https://store.steampowered.com/api/appdetails"
 
 
 @dataclass(frozen=True)
@@ -25,6 +26,12 @@ class Deal:
     @property
     def store_url(self) -> str:
         return f"https://store.steampowered.com/app/{self.appid}/"
+
+
+@dataclass(frozen=True)
+class DealMedia:
+    trailer_url: str | None
+    image_urls: list[str]
 
 
 class SteamClient:
@@ -61,3 +68,33 @@ class SteamClient:
                 discount_percent=discount,
                 discount_expiration=expiration,
             )
+
+    def fetch_deal_media(self, appid: int, max_images: int = 4) -> DealMedia:
+        response = requests.get(
+            STEAM_APP_DETAILS_URL,
+            params={"appids": appid, "cc": self.country, "l": self.language},
+            timeout=self.timeout_seconds,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        app_data = payload.get(str(appid), {})
+        data = app_data.get("data", {}) if app_data.get("success") else {}
+
+        trailer_url: str | None = None
+        movies = data.get("movies", []) or []
+        for movie in movies:
+            mp4 = movie.get("mp4", {}) or {}
+            trailer_url = mp4.get("max") or mp4.get("480")
+            if trailer_url:
+                break
+
+        image_urls: list[str] = []
+        screenshots = data.get("screenshots", []) or []
+        for shot in screenshots:
+            url = shot.get("path_full") or shot.get("path_thumbnail")
+            if url and url not in image_urls:
+                image_urls.append(url)
+            if len(image_urls) >= max_images:
+                break
+
+        return DealMedia(trailer_url=trailer_url, image_urls=image_urls)

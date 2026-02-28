@@ -1,12 +1,29 @@
 services:
+  postgres:
+    image: postgres:16
+    container_name: steam-watcher-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: steam_watcher
+      POSTGRES_USER: steam
+      POSTGRES_PASSWORD: steam
+    volumes:
+      - steam_watcher_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U steam -d steam_watcher"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   steam-watcher:
     build: .
     container_name: steam-watcher
     restart: unless-stopped
     env_file:
       - .env
-    volumes:
-      - steam_watcher_data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
 
 volumes:
-  steam_watcher_data:
+  steam_watcher_postgres_data:

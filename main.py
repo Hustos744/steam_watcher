@@ -24,7 +24,10 @@ def main() -> None:
         raise RuntimeError("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required when DRY_RUN=false")
 
     steam = SteamClient(country=settings.steam_country, language=settings.steam_language)
-    repository = StateRepository(sqlite_path=settings.sqlite_path)
+    repository = StateRepository(
+        database_url=settings.database_url,
+        retention_days=settings.retention_days,
+    )
     curator_blocklist = SteamCuratorBlocklist(
         curator_url=settings.curator_blocklist_url,
         refresh_seconds=settings.curator_blocklist_refresh_seconds,
@@ -34,6 +37,10 @@ def main() -> None:
         bot_token=settings.telegram_bot_token,
         chat_id=settings.telegram_chat_id,
         parse_mode=settings.telegram_parse_mode,
+        usd_to_uah_rate=settings.usd_to_uah_rate,
+        include_trailer=settings.telegram_include_trailer,
+        extra_images_count=settings.telegram_extra_images_count,
+        max_retries=settings.telegram_max_retries,
     )
 
     service = DiscountWatcherService(
@@ -42,6 +49,7 @@ def main() -> None:
         telegram=telegram,
         min_discount_percent=settings.min_discount_percent,
         max_posts_per_run=settings.max_posts_per_run,
+        post_delay_seconds=settings.post_delay_seconds,
         curator_blocklist=curator_blocklist,
         manual_blocklist_appids=settings.manual_blocklist_appids,
         dry_run=settings.dry_run,

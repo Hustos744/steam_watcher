@@ -27,15 +27,21 @@ class Settings:
     steam_country: str
     steam_language: str
     poll_interval_seconds: int
+    post_delay_seconds: float
     min_discount_percent: int
     max_posts_per_run: int
 
     telegram_bot_token: str
     telegram_chat_id: str
     telegram_parse_mode: str
+    usd_to_uah_rate: float
+    telegram_include_trailer: bool
+    telegram_extra_images_count: int
+    telegram_max_retries: int
     dry_run: bool
 
-    sqlite_path: str
+    database_url: str
+    retention_days: int
     log_level: str
     curator_blocklist_url: str
     curator_blocklist_refresh_seconds: int
@@ -54,13 +60,19 @@ def load_settings() -> Settings:
         steam_country=os.getenv("STEAM_COUNTRY", "us"),
         steam_language=os.getenv("STEAM_LANGUAGE", "en"),
         poll_interval_seconds=int(os.getenv("POLL_INTERVAL_SECONDS", "900")),
+        post_delay_seconds=float(os.getenv("POST_DELAY_SECONDS", "1.5")),
         min_discount_percent=int(os.getenv("MIN_DISCOUNT_PERCENT", "20")),
         max_posts_per_run=int(os.getenv("MAX_POSTS_PER_RUN", "10")),
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
         telegram_parse_mode=os.getenv("TELEGRAM_PARSE_MODE", "HTML"),
+        usd_to_uah_rate=float(os.getenv("USD_TO_UAH_RATE", "41.0")),
+        telegram_include_trailer=_to_bool(os.getenv("TELEGRAM_INCLUDE_TRAILER", "true"), default=True),
+        telegram_extra_images_count=int(os.getenv("TELEGRAM_EXTRA_IMAGES_COUNT", "3")),
+        telegram_max_retries=int(os.getenv("TELEGRAM_MAX_RETRIES", "3")),
         dry_run=_to_bool(os.getenv("DRY_RUN", "false"), default=False),
-        sqlite_path=os.getenv("SQLITE_PATH", "./data/state.db"),
+        database_url=os.getenv("DATABASE_URL", "postgresql://steam:steam@postgres:5432/steam_watcher"),
+        retention_days=int(os.getenv("RETENTION_DAYS", "30")),
         log_level=os.getenv("LOG_LEVEL", "INFO"),
         curator_blocklist_url=os.getenv("CURATOR_BLOCKLIST_URL", ""),
         curator_blocklist_refresh_seconds=int(os.getenv("CURATOR_BLOCKLIST_REFRESH_SECONDS", "3600")),
