@@ -38,6 +38,7 @@ class TikTokPipeline:
         self.design = ShortsDesign()
         self.ffmpeg_segment_timeout_seconds = 60
         self.ffmpeg_concat_timeout_seconds = 90
+        self.transition_seconds = 0.35
 
     def should_generate_today(self) -> bool:
         today = datetime.now(self.tz).strftime("%Y-%m-%d")
@@ -171,6 +172,59 @@ class TikTokPipeline:
         if duration is None or duration < min_seconds:
             raise RuntimeError(f"Generated segment is empty or too short: {path} (duration={duration})")
 
+    def _concat_with_transitions(self, segments: list[Path], out_file: Path) -> None:
+        if len(segments) == 1:
+            shutil.copyfile(segments[0], out_file)
+            return
+
+        durations: list[float] = []
+        for seg in segments:
+            dur = self._probe_duration_seconds(str(seg))
+            durations.append(dur if dur and dur > 0 else 0.0)
+
+        min_duration = min(durations) if durations else 0.0
+        transition = max(min(self.transition_seconds, min_duration / 3 if min_duration > 0 else 0.25), 0.1)
+
+        command: list[str] = ["ffmpeg", "-y"]
+        for seg in segments:
+            command.extend(["-i", str(seg)])
+
+        filter_parts: list[str] = []
+        current_label = "[0:v]"
+        offset = max(durations[0] - transition, 0.0)
+        for idx in range(1, len(segments)):
+            out_label = f"[v{idx}]"
+            filter_parts.append(
+                f"{current_label}[{idx}:v]xfade=transition=fade:duration={transition:.3f}:offset={offset:.3f}{out_label}"
+            )
+            current_label = out_label
+            if idx < len(segments) - 1:
+                offset += max(durations[idx] - transition, 0.0)
+
+        command.extend(
+            [
+                "-filter_complex",
+                ";".join(filter_parts),
+                "-map",
+                current_label,
+                "-r",
+                "30",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "fast",
+                "-crf",
+                "22",
+                "-pix_fmt",
+                "yuv420p",
+                "-an",
+                "-movflags",
+                "+faststart",
+                str(out_file),
+            ]
+        )
+        subprocess.run(command, check=True, capture_output=True, timeout=self.ffmpeg_concat_timeout_seconds)
+
     def generate_daily_video(self, deals_with_trailers: list[tuple[Deal, list[str]]]) -> Path | None:
         if not deals_with_trailers:
             return None
@@ -232,35 +286,7 @@ class TikTokPipeline:
             if len(segments) <= 2:
                 return None
 
-            concat_list = temp_dir / "concat.txt"
-            lines = [f"file '{p.as_posix()}'" for p in segments]
-            concat_list.write_text("\n".join(lines), encoding="utf-8")
-
-            concat_cmd = [
-                "ffmpeg",
-                "-y",
-                "-f",
-                "concat",
-                "-safe",
-                "0",
-                "-i",
-                str(concat_list),
-                "-r",
-                "30",
-                "-c:v",
-                "libx264",
-                "-preset",
-                "fast",
-                "-crf",
-                "22",
-                "-pix_fmt",
-                "yuv420p",
-                "-an",
-                "-movflags",
-                "+faststart",
-                str(out_file),
-            ]
-            subprocess.run(concat_cmd, check=True, capture_output=True, timeout=self.ffmpeg_concat_timeout_seconds)
+            self._concat_with_transitions(segments, out_file)
             self.logger.info("Daily video concat done. game_segments=%s output=%s", built_game_segments, out_file)
             self._mark_generated_today()
             return out_file
